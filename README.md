@@ -13,9 +13,9 @@ GPU acceleration would be tuff as well.
 
 ### Keybinds
 
-q to quit
-s to step one generation
-p to pause and play simulation
-c to show 8x8 chunks
-click and drag to move and scroll to zoom
+- q to quit
+- s to step one generation
+- p to pause and play simulation
+- c to show 8x8 chunks
+- click and drag to move and scroll to zoom
 
