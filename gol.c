@@ -216,7 +216,7 @@ int main() {
 		unsigned long s = rand();
 		s <<= 32;
 		s |= rand();
-		chunk_map_set(&cur, (i&0xf) - 4, (i>>4) - 4, s);
+		chunk_map_set(&cur, (i&0xf) - 8, (i>>4) - 8, s);
 	}
 
 	if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
