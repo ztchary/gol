@@ -1,4 +1,6 @@
 #include <SDL2/SDL.h>
+#include <pthread.h>
+#include <math.h>
 
 struct chunk {
 	int x;
@@ -11,6 +13,18 @@ struct chunk_map {
 	unsigned long cap;
 	unsigned long num;
 	struct chunk *data;
+};
+
+struct runner_data {
+	struct chunk_map *cur;
+	struct chunk_map *next;
+	bool *play;
+};
+
+struct cam {
+	float x;
+	float y;
+	float zoom;
 };
 
 uint64_t map_hash(int x, int y) {
@@ -85,15 +99,17 @@ void chunk_map_init(struct chunk_map *map) {
 	memset(map->data, 0, sizeof(struct chunk_map) * 16);
 }
 
-void render_chunks(SDL_Renderer *renderer, struct chunk_map *map, bool show_chunks, float camx, float camy, float zoom) {
+void render_chunks(SDL_Renderer *renderer, struct chunk_map *map, bool show_chunks, struct cam cam) {
 	SDL_FRect rect;
+	int width, height;
+	SDL_GetRendererOutputSize(renderer, &width, &height);
 	for (unsigned long i = 0; i < map->cap; i++) {
 		if (!map->data[i].occ) continue;
 		struct chunk chunk = map->data[i];
 		rect = (SDL_FRect){
-			((float)chunk.x * 8 - camx) * zoom + 400,
-			((float)chunk.y * 8 - camy) * zoom + 300,
-			zoom * 8, zoom * 8
+			((float)chunk.x * 8 - cam.x) * cam.zoom + width/2,
+			((float)chunk.y * 8 - cam.y) * cam.zoom + height/2,
+			cam.zoom * 8, cam.zoom * 8
 		};
 
 		if (show_chunks) {
@@ -106,9 +122,9 @@ void render_chunks(SDL_Renderer *renderer, struct chunk_map *map, bool show_chun
 				int gx = chunk.x * 8 + x;
 				int gy = chunk.y * 8 + y;
 				rect = (SDL_FRect){
-					((float)gx - camx) * zoom + 400,
-					((float)gy - camy) * zoom + 300,
-					zoom, zoom
+					((float)gx - cam.x) * cam.zoom + width/2,
+					((float)gy - cam.y) * cam.zoom + height/2,
+					cam.zoom, cam.zoom
 				};
 
 				SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -200,18 +216,66 @@ void update_chunks(struct chunk_map *cur, struct chunk_map *next) {
 	*next = tmp;
 }
 
+bool get_cell_cam(SDL_Renderer *renderer, struct chunk_map *map, struct cam cam, int x, int y) {
+	int width, height;
+	SDL_GetRendererOutputSize(renderer, &width, &height);
+
+	int gx = (int)floorf((x - width/2.0f) / cam.zoom + cam.x);
+	int gy = (int)floorf((y - height/2.0f) / cam.zoom + cam.y);
+	int chunkx = gx >= 0 ? gx / 8 : (gx - 7) / 8;
+	int chunky = gy >= 0 ? gy / 8 : (gy - 7) / 8;
+	int cellx = gx - chunkx * 8;
+	int celly = gy - chunky * 8;
+
+	unsigned long cells = chunk_map_get(map, chunkx, chunky);
+	return cells >> ((7 - celly) * 8 + (7 - cellx)) & 1UL;
+}
+
+void set_cell_cam(SDL_Renderer *renderer, struct chunk_map *map, struct cam cam, int x, int y, bool v) {
+	int width, height;
+	SDL_GetRendererOutputSize(renderer, &width, &height);
+
+	int gx = (int)floorf((x - width/2.0f) / cam.zoom + cam.x);
+	int gy = (int)floorf((y - height/2.0f) / cam.zoom + cam.y);
+	int chunkx = gx >= 0 ? gx / 8 : (gx - 7) / 8;
+	int chunky = gy >= 0 ? gy / 8 : (gy - 7) / 8;
+	int cellx = gx - chunkx * 8;
+	int celly = gy - chunky * 8;
+
+	unsigned long cells = chunk_map_get(map, chunkx, chunky);
+	unsigned long ch = 1UL << ((7 - celly) * 8 + (7 - cellx));
+	cells = (cells & ~ch) | (ch * v);
+
+	chunk_map_set(map, chunkx, chunky, cells);
+}
+
+void *runner(void *data) {
+	struct runner_data d = *(struct runner_data *)data;
+
+	for (;;) {
+		if (!*d.play) {
+			SDL_Delay(10);
+			continue;
+		}
+		update_chunks(d.cur, d.next);
+	}
+}
+
 int main() {
 	SDL_Window *window;
 	SDL_Renderer *renderer;
 
-	float camx = 0;
-	float camy = 0;
-	float zoom = 4;
+	struct cam cam = {
+		.x = 0,
+		.y = 0,
+		.zoom = 4
+	};
 
 	struct chunk_map cur;
 	struct chunk_map next;
 	chunk_map_init(&cur);
 	chunk_map_init(&next);
+
 	for (int i = 0; i < 0x100; i++) {
 		unsigned long s = rand();
 		s <<= 32;
@@ -224,7 +288,7 @@ int main() {
 		return 1;
 	}
 
-	if (SDL_CreateWindowAndRenderer(800, 600, SDL_WINDOW_SHOWN, &window, &renderer) != 0) {
+	if (SDL_CreateWindowAndRenderer(800, 600, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE, &window, &renderer) != 0) {
 		fprintf(stderr, "Failed to create window\n");
 		return 1;
 	}
@@ -233,9 +297,19 @@ int main() {
 
 	bool show_chunks = 0;
 	bool move = 0;
+	int draw = -1;
 	bool play = 0;
 	bool quit = 0;
 	SDL_Event e;
+
+	struct runner_data d = {
+		.play = &play,
+		.cur = &cur,
+		.next = &next
+	};
+
+	pthread_t tid;
+	pthread_create(&tid, NULL, runner, (void *)&d);
 
 	while (!quit) {
 		while (SDL_PollEvent(&e)) {
@@ -255,38 +329,50 @@ int main() {
 				if (e.key.keysym.sym == SDLK_p) {
 					play = !play;
 				}
+				if (e.key.keysym.sym == SDLK_r) {
+					chunk_map_clear(&cur);
+				}
 			}
 			if (e.type == SDL_MOUSEBUTTONDOWN) {
-				if (e.button.button == SDL_BUTTON_LEFT) {
+				if (e.button.button == SDL_BUTTON_RIGHT) {
 					move = 1;
+				}
+				if (e.button.button == SDL_BUTTON_LEFT) {
+					draw = !get_cell_cam(renderer, &cur, cam, e.button.x, e.button.y);
+					set_cell_cam(renderer, &cur, cam, e.button.x, e.button.y, draw);
 				}
 			}
 			if (e.type == SDL_MOUSEBUTTONUP) {
-				if (e.button.button == SDL_BUTTON_LEFT) {
+				if (e.button.button == SDL_BUTTON_RIGHT) {
 					move = 0;
+				}
+				if (e.button.button == SDL_BUTTON_LEFT) {
+					draw = -1;
 				}
 			}
 			if (e.type == SDL_MOUSEMOTION) {
 				if (move) {
-					camx -= e.motion.xrel / zoom;
-					camy -= e.motion.yrel / zoom;
+					cam.x -= e.motion.xrel / cam.zoom;
+					cam.y -= e.motion.yrel / cam.zoom;
+				}
+				if (draw != -1) {
+					set_cell_cam(renderer, &cur, cam, e.motion.x, e.motion.y, draw);
 				}
 			}
 			if (e.type == SDL_MOUSEWHEEL) {
 				if (e.wheel.y > 0) {
-					zoom *= 1.1;
+					cam.zoom *= 1.1;
 				}
 				if (e.wheel.y < 0) {
-					zoom /= 1.1;
+					cam.zoom /= 1.1;
 				}
 			}
 		}
 
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 		SDL_RenderClear(renderer);
-		render_chunks(renderer, &cur, show_chunks, camx, camy, zoom);
+		render_chunks(renderer, &cur, show_chunks, cam);
 		SDL_RenderPresent(renderer);
-		if (play) update_chunks(&cur, &next);
 	}
 }
 
