@@ -1,9 +1,5 @@
 #include <SDL2/SDL.h>
 
-float camx = 0;
-float camy = 0;
-float zoom = 4;
-
 struct chunk {
 	int x;
 	int y;
@@ -89,7 +85,7 @@ void chunk_map_init(struct chunk_map *map) {
 	memset(map->data, 0, sizeof(struct chunk_map) * 16);
 }
 
-void render_chunks(SDL_Renderer *renderer, struct chunk_map *map, bool show_chunks) {
+void render_chunks(SDL_Renderer *renderer, struct chunk_map *map, bool show_chunks, float camx, float camy, float zoom) {
 	SDL_FRect rect;
 	for (unsigned long i = 0; i < map->cap; i++) {
 		if (!map->data[i].occ) continue;
@@ -208,6 +204,10 @@ int main() {
 	SDL_Window *window;
 	SDL_Renderer *renderer;
 
+	float camx = 0;
+	float camy = 0;
+	float zoom = 4;
+
 	struct chunk_map cur;
 	struct chunk_map next;
 	chunk_map_init(&cur);
@@ -284,7 +284,7 @@ int main() {
 
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 		SDL_RenderClear(renderer);
-		render_chunks(renderer, &cur, show_chunks);
+		render_chunks(renderer, &cur, show_chunks, camx, camy, zoom);
 		SDL_RenderPresent(renderer);
 		if (play) update_chunks(&cur, &next);
 	}
